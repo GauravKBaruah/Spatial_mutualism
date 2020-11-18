@@ -1,1 +1,1 @@
-# Spatial_mutualism
+# Project repository for spatial mutualistic networks 
