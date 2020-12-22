@@ -1,5 +1,5 @@
 rm(list=ls())
-source('~/Dropbox/EAWAG PostDoc/Metacommunity_project/03_mutualism_metacommunity/01_mutualism_code.R', echo=F)#converting mutualism matrix to ones and zeros
+source('~/Dropbox/EAWAG PostDoc/05_Spatial_mutualism/Spatial_mutualism/01_mutualism_code.R')
 require(deSolve) ## for integrating ordinary differential equations
 require(tidyverse) ## for efficient data manipulation & plotting
 require(cowplot) ## for arranging plots in a grid
@@ -92,31 +92,30 @@ myfiles = list.files(path=mydir, pattern="*.csv", full.names=TRUE)
 #myfiles<-myfile
 newfiles<-myfiles[1:60]
 
-
+datasets/M_PL_061_33.csv
 #newfiles<-ex_webs
-fact<- expand.grid(`Strength_mutualism`=seq(2,12,0.25), `web` =newfiles,
+fact<- expand.grid(`Strength_mutualism`=c( 0.75), 
+                   `web` ="datasets/M_PL_061_33.csv",
                    #`initial.trait`=ru
                    `individual.variation` = c("high","low"),
-                   `evolution`=c("yes"),
-                   `random_seed`=4327+1*100) %>%
+                   `interaction`=c("HOI","pairwise"),
+                   `random_seed`=4127+(1:12)*100) %>%
   as_tibble %>%
   mutate(`Biomass.animal`=0,
          `Biomass.plant` =0,
-         `Nestedness`= 0,
-         `Connectance` = 0)
+         `plant.richness`=0,
+         `animal.richness`=0,
+         `richness`=0,
+        `trait.matching` = 0)
 model.t<-list()
 
 set.seed(1234)
 
 
 for(r in 1:nrow(fact)){
-  #print(r)
-  
-  
+
   g<-adj.mat(myfiles[which(myfiles == fact$web[r])]) #network web names
   g<-g[-1,-1] 
-  
-  
   Aspecies<- dim(g)[2] # no of animal species
   Plantspecies<- dim(g)[1] # no of plant species
   degree.animals<-degree.plants<-numeric()
@@ -131,18 +130,20 @@ for(r in 1:nrow(fact)){
   ##control loop for selecting whether variation is high or low
   if(fact$individual.variation[r] == "low"){
     sig <-runif((Aspecies+Plantspecies),0.0001,0.005)
-    }
-  else if(fact$individual.variation[r] == "high"){
+    } else if(fact$individual.variation[r] == "high"){
     sig <-runif((Aspecies+Plantspecies),0.05,0.1)}
   
   #higher-order interaction matrix for animals (intra+interHOIs)
   halpha_a<-array(NA,dim=c(Aspecies,Plantspecies,Aspecies))
   for (i in 1:Aspecies){
-    
+    halpha_a[i,,]<- rnorm(Aspecies*Plantspecies, 0, 0.01)
   }
   
-    
-  halpha_p<-array(NA, dim=c(Plantspecies,Aspecies,Aspecies)
+  #higher-order interaction matrix for plants (intra+interHOIs)  
+  halpha_p<-array(NA, dim=c(Plantspecies,Aspecies,Aspecies))
+  for (i in 1:Plantspecies){
+    halpha_p[i,,]<- rnorm(Aspecies*Aspecies, 0, 0.01)
+    }           
                     
   h2<-runif((Aspecies+Plantspecies),0.4,0.4)
   
@@ -156,13 +157,13 @@ for(r in 1:nrow(fact)){
   
   Amatrix<-mat.comp(g,degree.animals,degree.plants)$Amatrix
   Pmatrix<-mat.comp(g,degree.animals,degree.plants)$Pmatrix
-  gamma=0.75#fact_lessvar$Strength_mutualism[r]
-  mut.strength<-fact$Strength_mutualism[r]
+  gamma=fact$Strength_mutualism[r]#fact_lessvar$Strength_mutualism[r]
+  mut.strength<-5
   nestedness<-nestedness_NODF(g)
   C<-Connectance(g)
   web.name<-myfiles[r]
-  ba<-runif(Aspecies, -0.5,-0.1)
-  bp<-runif(Plantspecies,-0.5,-0.1)
+  ba<-runif(Aspecies, -0.5,-0.05)
+  bp<-runif(Plantspecies,-0.5,-0.05)
   dganimals<-degree.animals
   dgplants<-degree.plants
   
@@ -174,25 +175,36 @@ for(r in 1:nrow(fact)){
                  Pmatrix=Pmatrix,w=gamma,
                  mut.strength=mut.strength,m=muinit,C=C,nestedness=nestedness,
                  web.name=web.name,h2=h2, ba=ba,bp=bp,dganimals=dganimals,
-                 dgplants=dgplants)
+                 dgplants=dgplants,halpha_p=halpha_p,halpha_a=halpha_a, model= fact$interaction[r])
   
   
   
-  start.time =800
+  start.time =1500
   model.t<-lapply(1, Mcommunity,time=start.time,state=ic,
                   pars=params)
-  ts.plot(model.t[[1]]$Plants)
+
   
-  pbiomass<-sum( colMeans(model.t[[1]]$Plants[600:800,]))
-  abiomass<-sum( colMeans(model.t[[1]]$Animals[600:800,]))
+  plot_snapshot(Na = model.t[[1]]$Animals[1500,],
+                Np = model.t[[1]]$Plants[1500,],
+                m = c(model.t[[1]]$Animal.trait[1500,], model.t[[1]]$Plant.trait[1500,]),
+                sigma =sig, moment=0, limits=c(-0.8, 0.8), res=1001)
   
+  
+  pbiomass<-sum(colMeans(model.t[[1]]$Plants[600:1500,]))
+  abiomass<-sum(colMeans(model.t[[1]]$Animals[600:1500,]))
+  
+  fact$plant.richness[r] <-length(which(model.t[[1]]$Plants[1500,] > 0))
+  fact$animal.richness[r] <-length(which(model.t[[1]]$Animals[1500,] > 0))
+  fact$richness[r] <- fact$animal.richness[r] +   fact$plant.richness[r]
   fact$Biomass.animal[r] = abiomass
   fact$Biomass.plant[r] = pbiomass
-  fact$Nestedness[r] = nestedness_NODF(g)
-  fact$Connectance[r] = Connectance(g)
+  fact$CV.trait[r] = traitCV(mus = c(model.t[[1]]$Animal.trait[1500,], model.t[[1]]$Plant.trait[1500,]),
+                             N = c(model.t[[1]]$Animals[1500,],model.t[[1]]$Plants[1500,]))
+  fact$trait.matching[r] = trait.matching(mA = model.t[[1]]$Animal.trait[1500,],
+                                         mP = model.t[[1]]$Plant.trait[1500,],
+                                         adj.mat_1=g,
+                                         gamma=gamma)
+
   print(r)
-  
-  # cardiology= amc opd : mriganka chaliha
-  
 }
-save(fact, file="Mutualism_data_16oct.RData")
+save(fact, file="Mutualism_data.RData")

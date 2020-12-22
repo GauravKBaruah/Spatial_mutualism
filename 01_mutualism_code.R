@@ -1,10 +1,84 @@
 rm(list=ls())
 
+
+require(statmod)
+
 #1. Web of interaction as matrix
 #2. species trait variances
 #3. m: species mean trait values that do not evolve
 cutoff <- function(x) ifelse(x<1, (1*(x>0))*(x*x*x*(10+x*(-15+6*x))), 1)
-require(statmod)
+
+traitCV <- function(mus,N){
+  mus[N==0] <- NA
+  v <- sort(mus[is.na(mus)==FALSE])
+  d <- diff(v)
+  cvs<-sd(d)/mean(d)
+
+  return(cvs)
+}
+
+
+trait.matching<-function(mA,mP,adj.mat_1,gamma){
+  tm<-numeric()
+  for(i in 1:nrow(adj.mat_1)){
+    tm[i] <- mean(adj.mat_1[i,]*exp(-(mA-mP[i])^2)/gamma)
+    
+  }
+  return(tm=mean(tm))
+}
+
+
+plot_snapshot <- function(Na, Np, m, sigma, moment=0, limits=c(-0.8, 0.8), res=1001) {
+  Sa <- length(Na) ## number of species
+  Sp <- length(Np)
+  ma<- m[1:(Sa)]
+  mp<- m[Sa+1:Sp]
+  sigma_a <-sigma[1:(Sa)]
+  sigma_p <- sigma[Sa+1:Sp]
+  traitaxis <- seq(limits[1], limits[2], l=res) ## sampling the trait axis
+  #snap <- dat %>% filter(time==moment) %>% select(-time) ## time = moment
+  traits_a <- expand.grid(species=1:Sa, trait=traitaxis) %>% as_tibble ## trait table
+  traits_p <- expand.grid(species=Sa+1:Sp, trait=traitaxis) %>% as_tibble ## trait table
+  
+  traits_a["density"] <- 0 ## add column for population densities
+  traits_p["density"] <- 0
+  
+  for (i in 1:Sa) {
+    #v <- snap %>% filter(species==i) %>% select(n, m, sigma)
+    traits_a$density[(traits_a$species==i)] <- Na[i]*
+      dnorm(traits_a$trait[(traits_a$species==i)], ma[i], sigma_a[i]) ## times density
+  }
+  traits_a$density[traits_a$density<max(traits_a$density)/1e3] <- NA
+  
+  for (i in (Sa+1):(Sa+Sp)) {
+    #v <- snap %>% filter(species==i) %>% select(n, m, sigma)
+    traits_p$density[(traits_p$species==i)] <- Np[-(Sa+Sp)+i+2]*dnorm(traits_p$trait[(traits_p$species==i)], 
+                                                           mp[-(Sa+Sp)+i+2], sigma_p[-(Sa+Sp)+i+2]) ## times density
+  }
+  traits_p$density[traits_p$density<max(traits_p$density)/1e3] <- NA
+  
+  #landscape <- tibble(trait=traitaxis, r=0) %>% ## for plotting intrinsic rates
+  #  mutate(r=1-trait^2/dat$theta[1]^2) %>% ## phenotype-specific growth rates
+  #  mutate(r=ifelse(r<=0, NA, r)) %>%
+   # mutate(r=r*max(traits$density, na.rm=TRUE)) ## scale growth rates for plotting
+  traits<-data.frame(rbind(traits_a,traits_p), 
+                     species_group=c(rep("Animals", nrow(traits_a)),
+                                                 rep("Plants", nrow(traits_p))))
+             
+  ggplot(traits) + ## generate plot
+    geom_line(aes(x=trait, y=density, colour=factor(species)), na.rm=TRUE) +
+    geom_ribbon(aes(x=trait, ymin=0, ymax=density, fill=factor(species)),
+                alpha=0.15, colour=NA)+facet_wrap(.~species_group, nrow = 2)+
+    #geom_line(data=landscape, aes(x=trait, y=r), linetype="dashed",
+     #         colour="darkred", alpha=0.5, na.rm=TRUE) +
+    scale_x_continuous(name="trait value", limits=limits) +
+    scale_y_continuous(name="density", limits=c(0, NA)) +
+    theme(legend.position="none") %>%
+    return }
+
+
+
+
 gausquad.animals<-function(m,sigma,w,h,np,na,mut.strength,points,mat,degree.animal){
   
   
@@ -32,7 +106,7 @@ gausquad.animals<-function(m,sigma,w,h,np,na,mut.strength,points,mat,degree.anim
     temp2[i]<- sum(np*(mut.strength/degree.animal)*exp(-(z1[i]- z2)^2/w^2)/(1+h*np*(mut.strength/degree.animal)*exp(-(z1[i]-z2)^2/w^2))*w2*w1[i])
     
       #sum(exp(-(z1[i]- z2)^2/w^2)*w2*w1[i])
-       x2[i]<- sum(h*w2*exp(-(z1[i]-z2)^2/w^2))
+    x2[i]<- sum(h*w2*exp(-(z1[i]-z2)^2/w^2))
     dat2[i]<- sum((z1[i]-m$ma)*(exp(-(z1[i]- z2)^2/w^2)*w2*w1[i]))
     
      # x3[i] <-sum(h*w2*exp(-(z1[i]-z2)^2/w^2))
@@ -97,6 +171,7 @@ eqs <- function(time, state, pars) {
   ## define g, where g[i] is the selection pressure on species i from growth
   alpha.a<-pars$Amatrix ## alpha matrix
   alpha.p<-pars$Pmatrix
+  horder_a<-horder_p<-numeric()
   halpha_a<-pars$halpha_a
   halpha_p<-pars$halpha_p
   dt<-0.1
@@ -125,7 +200,7 @@ eqs <- function(time, state, pars) {
     }
     ai[r]<-sum(aij[r,])
     bi[r]<-sum(bij[r,])
-    
+    horder_a[r] <- t(Np[t,])%*%halpha_a[r,,]%*%Na[t,]
     
   }
   for(k in 1:P){
@@ -141,20 +216,31 @@ eqs <- function(time, state, pars) {
     aj[k]<-sum(aji[k,])
     bj[k]<-sum(bji[k,])
     
-    
+    horder_p[k] <- t(Na[t,])%*%halpha_p[k,,]%*%Na[t,]
   }
     
     
   #print(t)
     #a*sum(N[t,,i]*Disp.mat[k,])*dt - a*N[t,k,i]*dt +rnorm(1,0,0.02)*dt*N[t,k,i]
-    Na[t+1, ]<-Na[t,] + Na[t,]*(pars$ba-alpha.a%*%Na[t,]+ai)*dt #+ rnorm(A, 0,sd=0.0)*Na[t,]*dt## density eqs
-    Np[t+1, ]<-Np[t,] + Np[t,]*(pars$bp-alpha.p%*%Np[t,]+aj)*dt #+ rnorm(P, 0,sd=0.0)*Np[t,]*dt ## trait mean eqs
+    
+    if (pars$model == "HOI"){
+    Na[t+1, ]<-Na[t,] + Na[t,]*(pars$ba-alpha.a%*%Na[t,]+ai+horder_a)*dt #+ rnorm(A, 0,sd=0.0)*Na[t,]*dt## density eqs
+    Np[t+1, ]<-Np[t,] + Np[t,]*(pars$bp-alpha.p%*%Np[t,]+aj+horder_p)*dt #+ rnorm(P, 0,sd=0.0)*Np[t,]*dt ## trait mean eqs
     muA[t+1, ]<-muA[t,] +pars$h2[1:A]*(bij%*%Np[t,])*dt + rnorm(A, 0,sd=0.0)*dt ## trait mean eqs
     muP[t+1, ]<- muP[t,]+pars$h2[(A+1):(A+P)]*(bji%*%Na[t,])*dt + rnorm(P, 0,sd=0.0)*dt ## trait mean eqs
   
-    Na[t+1,which(Na[t+1,] < 0)]<-0
-    Np[t+1,which(Np[t+1,] < 0)]<-0
-    
+    Na[t+1,which(Na[t+1,] < 1e-4)]<-0
+    Np[t+1,which(Np[t+1,] < 1e-4)]<-0
+    } else if (pars$model == "pairwise"){
+      Na[t+1, ]<-Na[t,] + Na[t,]*(pars$ba-alpha.a%*%Na[t,]+ai)*dt #+ rnorm(A, 0,sd=0.0)*Na[t,]*dt## density eqs
+      Np[t+1, ]<-Np[t,] + Np[t,]*(pars$bp-alpha.p%*%Np[t,]+aj)*dt #+ rnorm(P, 0,sd=0.0)*Np[t,]*dt ## trait mean eqs
+      muA[t+1, ]<-muA[t,] +pars$h2[1:A]*(bij%*%Np[t,])*dt + rnorm(A, 0,sd=0.0)*dt ## trait mean eqs
+      muP[t+1, ]<- muP[t,]+pars$h2[(A+1):(A+P)]*(bji%*%Na[t,])*dt + rnorm(P, 0,sd=0.0)*dt ## trait mean eqs
+      
+      Na[t+1,which(Na[t+1,] < 1e-4)]<-0
+      Np[t+1,which(Np[t+1,] < 1e-4)]<-0
+      
+    }
 
   } 
 #ts.plot(Na,ylim=c(0,5))
